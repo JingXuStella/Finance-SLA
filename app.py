@@ -25,6 +25,7 @@ TYPES = {"主合同收入":"contract", "VO变更款项收入":"contract", "分�
 STATUSES = ["未开票", "已开票"]
 INCOME_STATUSES = ["未收款", "部分收款", "已收款"]
 EXPENSE_STATUSES = ["未支付", "部分支付", "已支付"]
+ENTRY_STATUSES = ["ongoing", "Closed"]
 
 class User(db.Model):
  id=db.Column(db.Integer,primary_key=True); username=db.Column(db.String(64),unique=True,nullable=False); password_hash=db.Column(db.String(256),nullable=False); is_admin=db.Column(db.Boolean,default=False); created_at=db.Column(db.DateTime,default=datetime.utcnow)
@@ -39,8 +40,11 @@ class Project(db.Model):
   for e in self.entries: t[e.category]+=e.amount; t["invoice"]+=e.invoice_amount
   t["profit"]=t["contract"]-t["subcontract"]-t["other"]; return t
 class LedgerEntry(db.Model):
- id=db.Column(db.Integer,primary_key=True); project_id=db.Column(db.Integer,db.ForeignKey("project.id"),index=True,nullable=False); payment_type=db.Column(db.String(40),nullable=False); category=db.Column(db.String(20),nullable=False); amount=db.Column(db.Numeric(14,2),default=0); currency=db.Column(db.String(8),default="CNY"); receipt_status=db.Column(db.String(30),default="未收款"); received_amount=db.Column(db.Numeric(14,2),default=0); invoice_amount=db.Column(db.Numeric(14,2),default=0); invoice_status=db.Column(db.String(30),default="未开票"); payment_date=db.Column(db.Date,default=date.today); notes=db.Column(db.Text,default="")
+ id=db.Column(db.Integer,primary_key=True); project_id=db.Column(db.Integer,db.ForeignKey("project.id"),index=True,nullable=False); payment_type=db.Column(db.String(40),nullable=False); category=db.Column(db.String(20),nullable=False); amount=db.Column(db.Numeric(14,2),default=0); currency=db.Column(db.String(8),default="CNY"); entry_status=db.Column(db.String(20),default="ongoing"); has_stages=db.Column(db.Boolean,default=False); receipt_status=db.Column(db.String(30),default="未收款"); received_amount=db.Column(db.Numeric(14,2),default=0); invoice_amount=db.Column(db.Numeric(14,2),default=0); invoice_status=db.Column(db.String(30),default="未开票"); payment_date=db.Column(db.Date,default=date.today); notes=db.Column(db.Text,default="")
  attachments=db.relationship("Attachment",backref="entry",cascade="all, delete-orphan",lazy="select")
+ stages=db.relationship("PaymentStage",backref="entry",cascade="all, delete-orphan",lazy="select",order_by="PaymentStage.sequence")
+class PaymentStage(db.Model):
+ id=db.Column(db.Integer,primary_key=True);entry_id=db.Column(db.Integer,db.ForeignKey("ledger_entry.id"),nullable=False,index=True);sequence=db.Column(db.Integer,nullable=False);amount=db.Column(db.Numeric(14,2),nullable=False,default=0)
 class Attachment(db.Model):
  id=db.Column(db.Integer,primary_key=True); entry_id=db.Column(db.Integer,db.ForeignKey("ledger_entry.id"),nullable=False,index=True); original_name=db.Column(db.String(255),nullable=False); stored_name=db.Column(db.String(255),nullable=False,unique=True); uploaded_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 
@@ -72,7 +76,7 @@ def export_rows(year):
   for e in p.entries: rows.append([p.name,e.payment_date.strftime("%Y-%m-%d"),e.payment_type,e.currency,float(e.amount),e.receipt_status,float(e.received_amount or 0),e.invoice_status,float(e.invoice_amount),e.notes or ""])
  return rows
 @app.context_processor
-def ctx(): return {"current_user":me(),"now_year":datetime.now().year,"payment_types":TYPES,"invoice_statuses":STATUSES,"income_statuses":INCOME_STATUSES,"expense_statuses":EXPENSE_STATUSES,"settlement_statuses":INCOME_STATUSES+EXPENSE_STATUSES}
+def ctx(): return {"current_user":me(),"now_year":datetime.now().year,"payment_types":TYPES,"invoice_statuses":STATUSES,"income_statuses":INCOME_STATUSES,"expense_statuses":EXPENSE_STATUSES,"settlement_statuses":INCOME_STATUSES+EXPENSE_STATUSES,"entry_statuses":ENTRY_STATUSES}
 @app.template_filter("currency")
 def currency(v): return f"¥{(v or 0):,.2f}"
 
@@ -150,9 +154,15 @@ def save_entry(e,p):
   typ=request.form["payment_type"]
   if typ not in TYPES:raise ValueError("款项类型无效。")
   if not e:e=LedgerEntry(project=p)
-  e.payment_type=typ;e.category=TYPES[typ];e.amount=amount("receivable_amount");e.currency=request.form.get("currency","CNY");e.receipt_status=request.form["receipt_status"];e.received_amount=amount("received_amount");e.invoice_amount=amount("invoice_amount");e.invoice_status=request.form["invoice_status"];e.payment_date=datetime.strptime(request.form["payment_date"],"%Y-%m-%d").date();e.notes=request.form.get("notes","")
+  e.payment_type=typ;e.category=TYPES[typ];e.amount=amount("receivable_amount");e.currency=request.form.get("currency","CNY");e.entry_status=request.form.get("entry_status","ongoing");e.has_stages=request.form.get("has_stages")=="on";e.receipt_status=request.form["receipt_status"];e.received_amount=amount("received_amount");e.invoice_amount=amount("invoice_amount");e.invoice_status=request.form["invoice_status"];e.payment_date=datetime.strptime(request.form["payment_date"],"%Y-%m-%d").date();e.notes=request.form.get("notes","")
   allowed=INCOME_STATUSES if e.category=="contract" else EXPENSE_STATUSES
-  if e.invoice_status not in STATUSES or e.receipt_status not in allowed:raise ValueError("款项状态与款项类型不匹配。")
+  if e.entry_status not in ENTRY_STATUSES or e.invoice_status not in STATUSES or e.receipt_status not in allowed:raise ValueError("款项状态与款项类型不匹配。")
+  if e.has_stages:
+   count=int(request.form.get("stage_count",0))
+   if count<1 or count>5: raise ValueError("阶段数量需在 1 至 5 之间。")
+   e.stages.clear()
+   for i in range(1,count+1): e.stages.append(PaymentStage(sequence=i,amount=amount(f"stage_amount_{i}")))
+  else: e.stages.clear()
   db.session.add(e);db.session.commit();flash("款项已保存。","success")
  except Exception as x:flash(str(x),"danger")
  return redirect(url_for("project_detail",project_id=(p or e.project).id))
@@ -210,6 +220,8 @@ def initialize():
   if 'currency' not in columns: conn.execute(text("ALTER TABLE ledger_entry ADD COLUMN currency VARCHAR(8) DEFAULT 'CNY'"))
   if 'receipt_status' not in columns: conn.execute(text("ALTER TABLE ledger_entry ADD COLUMN receipt_status VARCHAR(30) DEFAULT '未收款'"))
   if 'received_amount' not in columns: conn.execute(text("ALTER TABLE ledger_entry ADD COLUMN received_amount NUMERIC(14,2) DEFAULT 0"))
+  if 'entry_status' not in columns: conn.execute(text("ALTER TABLE ledger_entry ADD COLUMN entry_status VARCHAR(20) DEFAULT 'ongoing'"))
+  if 'has_stages' not in columns: conn.execute(text("ALTER TABLE ledger_entry ADD COLUMN has_stages BOOLEAN DEFAULT FALSE"))
  if not User.query.first():
   u=User(username=os.getenv("ADMIN_USERNAME","admin"),is_admin=True);u.set_password(os.getenv("ADMIN_PASSWORD","ChangeMe123!"));db.session.add(u);db.session.commit()
  for p in Project.query.all():
