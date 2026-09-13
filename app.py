@@ -23,7 +23,8 @@ app.config.update(SECRET_KEY=os.getenv("SECRET_KEY", "change-this-before-product
 db = SQLAlchemy(app)
 TYPES = {"主合同收入":"contract", "VO变更款项收入":"contract", "分包支出":"subcontract", "其他支出":"other"}
 STATUSES = ["未开票", "部分开票", "已开票", "已收款"]
-RECEIPT_STATUSES = ["未收款", "部分收款", "已收款"]
+INCOME_STATUSES = ["未收款", "部分收款", "已收款"]
+EXPENSE_STATUSES = ["未支付", "部分支付", "已支付"]
 
 class User(db.Model):
  id=db.Column(db.Integer,primary_key=True); username=db.Column(db.String(64),unique=True,nullable=False); password_hash=db.Column(db.String(256),nullable=False); is_admin=db.Column(db.Boolean,default=False); created_at=db.Column(db.DateTime,default=datetime.utcnow)
@@ -71,7 +72,7 @@ def export_rows(year):
   for e in p.entries: rows.append([p.name,e.payment_date.strftime("%Y-%m-%d"),e.payment_type,e.currency,float(e.amount),e.receipt_status,float(e.received_amount or 0),e.invoice_status,float(e.invoice_amount),e.notes or ""])
  return rows
 @app.context_processor
-def ctx(): return {"current_user":me(),"now_year":datetime.now().year,"payment_types":TYPES,"invoice_statuses":STATUSES,"receipt_statuses":RECEIPT_STATUSES}
+def ctx(): return {"current_user":me(),"now_year":datetime.now().year,"payment_types":TYPES,"invoice_statuses":STATUSES,"income_statuses":INCOME_STATUSES,"expense_statuses":EXPENSE_STATUSES,"settlement_statuses":INCOME_STATUSES+EXPENSE_STATUSES}
 @app.template_filter("currency")
 def currency(v): return f"¥{(v or 0):,.2f}"
 
@@ -150,7 +151,8 @@ def save_entry(e,p):
   if typ not in TYPES:raise ValueError("款项类型无效。")
   if not e:e=LedgerEntry(project=p)
   e.payment_type=typ;e.category=TYPES[typ];e.amount=amount("receivable_amount");e.currency=request.form.get("currency","CNY");e.receipt_status=request.form["receipt_status"];e.received_amount=amount("received_amount");e.invoice_amount=amount("invoice_amount");e.invoice_status=request.form["invoice_status"];e.payment_date=datetime.strptime(request.form["payment_date"],"%Y-%m-%d").date();e.notes=request.form.get("notes","")
-  if e.invoice_status not in STATUSES or e.receipt_status not in RECEIPT_STATUSES:raise ValueError("状态无效。")
+  allowed=INCOME_STATUSES if e.category=="contract" else EXPENSE_STATUSES
+  if e.invoice_status not in STATUSES or e.receipt_status not in allowed:raise ValueError("款项状态与款项类型不匹配。")
   db.session.add(e);db.session.commit();flash("款项已保存。","success")
  except Exception as x:flash(str(x),"danger")
  return redirect(url_for("project_detail",project_id=(p or e.project).id))
