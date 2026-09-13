@@ -22,7 +22,7 @@ url = os.getenv("DATABASE_URL", "sqlite:///finance.db").replace("postgres://", "
 app.config.update(SECRET_KEY=os.getenv("SECRET_KEY", "change-this-before-production"), SQLALCHEMY_DATABASE_URI=url, SQLALCHEMY_TRACK_MODIFICATIONS=False, UPLOAD_FOLDER=os.getenv("UPLOAD_FOLDER", os.path.join(app.root_path,"instance","uploads")), MAX_CONTENT_LENGTH=20*1024*1024)
 db = SQLAlchemy(app)
 TYPES = {"主合同收入":"contract", "VO变更款项收入":"contract", "分包支出":"subcontract", "其他支出":"other"}
-STATUSES = ["未开票", "部分开票", "已开票", "已收款"]
+STATUSES = ["未开票", "已开票"]
 INCOME_STATUSES = ["未收款", "部分收款", "已收款"]
 EXPENSE_STATUSES = ["未支付", "部分支付", "已支付"]
 
@@ -217,6 +217,8 @@ def initialize():
    for typ,val,inv,status in [("主合同收入",p.contract_amount,p.invoice_amount,p.invoice_status),("分包支出",p.subcontract_amount,0,"未开票"),("其他支出",p.other_cost,0,"未开票")]:
     if val:db.session.add(LedgerEntry(project=p,payment_type=typ,category=TYPES[typ],amount=val,invoice_amount=inv,invoice_status=status,payment_date=date.today(),notes="由旧版汇总数据转换"))
    p.contract_amount=p.subcontract_amount=p.other_cost=p.invoice_amount=0
+ for e in LedgerEntry.query.all():
+  if e.invoice_status not in STATUSES: e.invoice_status="已开票" if e.amount and e.invoice_amount>=e.amount else "未开票"
  db.session.commit()
 with app.app_context():initialize()
 if __name__=="__main__":app.run(host="0.0.0.0",port=int(os.getenv("PORT",5000)),debug=True)
