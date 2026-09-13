@@ -1,0 +1,1 @@
+.attachments{min-width:170px}.attachments>a{display:block;color:#ef1746;text-decoration:none;overflow-wrap:anywhere;margin-bottom:5px}.attachments form{display:flex;flex-direction:column;gap:6px}.attachments input[type=file]{font-size:11px;padding:5px}.upload-btn{padding:6px 8px;font-size:12px}@media(max-width:700px){.attachments{min-width:140px}}

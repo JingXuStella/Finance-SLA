@@ -4,6 +4,10 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
+    disk:
+      name: finance-ledger-files
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.4
@@ -17,6 +21,8 @@ services:
         fromDatabase:
           name: finance-ledger-db
           property: connectionString
+      - key: UPLOAD_FOLDER
+        value: /var/data/uploads
 databases:
   - name: finance-ledger-db
     databaseName: finance_ledger

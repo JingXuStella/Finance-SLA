@@ -7,10 +7,12 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='detail-dialog.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='export.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='account.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='attachments.css') }}">
 </head>
 <body>
 {% if current_user %}
-<header><a class="brand" href="{{ url_for('dashboard') }}">账本 · 财务管理</a><nav><span>{{ current_user.username }}{% if current_user.is_admin %} · 管理员{% endif %}</span>{% if current_user.is_admin %}<a href="{{ url_for('users') }}">用户管理</a>{% endif %}<a href="{{ url_for('logout') }}">退出</a></nav></header>
+<header><a class="brand" href="{{ url_for('dashboard') }}">账本 · 财务管理</a><nav><span>{{ current_user.username }}{% if current_user.is_admin %} · 管理员{% endif %}</span><a href="{{ url_for('users') }}">用户管理</a><a href="{{ url_for('logout') }}">退出</a></nav></header>
 {% endif %}
 <main class="container">
   {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}

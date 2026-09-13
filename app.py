@@ -1,11 +1,13 @@
 import os
+import uuid
 from io import BytesIO
 from datetime import date, datetime
 from decimal import Decimal
-from flask import Flask, flash, redirect, render_template, request, session, url_for, send_file
+from flask import Flask, flash, redirect, render_template, request, session, url_for, send_file, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect, text
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from reportlab.lib import colors
@@ -17,7 +19,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 
 app = Flask(__name__)
 url = os.getenv("DATABASE_URL", "sqlite:///finance.db").replace("postgres://", "postgresql://", 1)
-app.config.update(SECRET_KEY=os.getenv("SECRET_KEY", "change-this-before-production"), SQLALCHEMY_DATABASE_URI=url, SQLALCHEMY_TRACK_MODIFICATIONS=False)
+app.config.update(SECRET_KEY=os.getenv("SECRET_KEY", "change-this-before-production"), SQLALCHEMY_DATABASE_URI=url, SQLALCHEMY_TRACK_MODIFICATIONS=False, UPLOAD_FOLDER=os.getenv("UPLOAD_FOLDER", os.path.join(app.root_path,"instance","uploads")), MAX_CONTENT_LENGTH=20*1024*1024)
 db = SQLAlchemy(app)
 TYPES = {"主合同收入":"contract", "VO变更款项收入":"contract", "分包支出":"subcontract", "其他支出":"other"}
 STATUSES = ["未开票", "部分开票", "已开票", "已收款"]
@@ -37,6 +39,9 @@ class Project(db.Model):
   t["profit"]=t["contract"]-t["subcontract"]-t["other"]; return t
 class LedgerEntry(db.Model):
  id=db.Column(db.Integer,primary_key=True); project_id=db.Column(db.Integer,db.ForeignKey("project.id"),index=True,nullable=False); payment_type=db.Column(db.String(40),nullable=False); category=db.Column(db.String(20),nullable=False); amount=db.Column(db.Numeric(14,2),default=0); currency=db.Column(db.String(8),default="CNY"); receipt_status=db.Column(db.String(30),default="未收款"); received_amount=db.Column(db.Numeric(14,2),default=0); invoice_amount=db.Column(db.Numeric(14,2),default=0); invoice_status=db.Column(db.String(30),default="未开票"); payment_date=db.Column(db.Date,default=date.today); notes=db.Column(db.Text,default="")
+ attachments=db.relationship("Attachment",backref="entry",cascade="all, delete-orphan",lazy="select")
+class Attachment(db.Model):
+ id=db.Column(db.Integer,primary_key=True); entry_id=db.Column(db.Integer,db.ForeignKey("ledger_entry.id"),nullable=False,index=True); original_name=db.Column(db.String(255),nullable=False); stored_name=db.Column(db.String(255),nullable=False,unique=True); uploaded_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 
 def me(): return db.session.get(User,session["user_id"]) if session.get("user_id") else None
 def login_required(f):
@@ -153,20 +158,50 @@ def save_entry(e,p):
 @login_required
 def entry_delete(entry_id):
  e=db.get_or_404(LedgerEntry,entry_id);p=e.project_id;db.session.delete(e);db.session.commit();return redirect(url_for("project_detail",project_id=p))
+@app.route("/entries/<int:entry_id>/attachments",methods=["POST"])
+@login_required
+def attachment_upload(entry_id):
+ e=db.get_or_404(LedgerEntry,entry_id);f=request.files.get("attachment"); allowed={"jpg","jpeg","png","gif","webp","pdf","xlsx","xls","doc","docx","csv","txt"}
+ if not f or not f.filename: flash("请选择要上传的附件。","danger")
+ elif "." not in f.filename or f.filename.rsplit(".",1)[1].lower() not in allowed: flash("不支持该文件格式。","danger")
+ else:
+  original=secure_filename(f.filename) or "attachment"; stored=f"{uuid.uuid4().hex}_{original}";os.makedirs(app.config["UPLOAD_FOLDER"],exist_ok=True);f.save(os.path.join(app.config["UPLOAD_FOLDER"],stored));db.session.add(Attachment(entry=e,original_name=original,stored_name=stored));db.session.commit();flash("附件已上传。","success")
+ return redirect(url_for("project_detail",project_id=e.project_id))
+@app.route("/attachments/<int:attachment_id>/download")
+@login_required
+def attachment_download(attachment_id):
+ a=db.get_or_404(Attachment,attachment_id);return send_from_directory(app.config["UPLOAD_FOLDER"],a.stored_name,as_attachment=True,download_name=a.original_name)
 
 @app.route("/users",methods=["GET","POST"])
-@admin_required
 def users():
- if request.method=="POST":
+ if not me(): return redirect(url_for("login"))
+ if request.method=="POST" and me().is_admin:
   name,pw=request.form.get("username",""),request.form.get("password","")
   if len(name)<2 or len(pw)<8: flash("用户名至少 2 位，密码至少 8 位。","danger")
   elif User.query.filter_by(username=name).first(): flash("该用户名已经存在。","danger")
   else:
    u=User(username=name,is_admin=request.form.get("is_admin")=="on");u.set_password(pw);db.session.add(u);db.session.commit();return redirect(url_for("users"))
- return render_template("users.html",users=User.query.order_by(User.created_at.desc()).all())
+ return render_template("users.html",users=User.query.order_by(User.created_at.desc()).all() if me().is_admin else [me()])
+
+@app.route("/users/<int:user_id>/update",methods=["POST"])
+@login_required
+def user_update(user_id):
+ target=db.get_or_404(User,user_id)
+ if not me().is_admin and target.id != me().id:
+  flash("你只能修改自己的账号。","danger");return redirect(url_for("users"))
+ name=request.form.get("username","").strip(); password=request.form.get("password","")
+ if len(name)<2: flash("用户名至少 2 位。","danger")
+ elif User.query.filter(User.username==name,User.id!=target.id).first(): flash("该用户名已经存在。","danger")
+ elif password and len(password)<8: flash("新密码至少 8 位。","danger")
+ else:
+  target.username=name
+  if password: target.set_password(password)
+  db.session.commit(); flash("账号信息已更新。","success")
+ return redirect(url_for("users"))
 
 def initialize():
  db.create_all()
+ os.makedirs(app.config["UPLOAD_FOLDER"],exist_ok=True)
  # Add columns for deployments originally created before detailed receipt tracking.
  columns={c['name'] for c in inspect(db.engine).get_columns('ledger_entry')}
  with db.engine.begin() as conn:
