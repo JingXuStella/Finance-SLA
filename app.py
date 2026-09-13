@@ -9,7 +9,7 @@ app = Flask(__name__)
 url = os.getenv("DATABASE_URL", "sqlite:///finance.db").replace("postgres://", "postgresql://", 1)
 app.config.update(SECRET_KEY=os.getenv("SECRET_KEY", "change-this-before-production"), SQLALCHEMY_DATABASE_URI=url, SQLALCHEMY_TRACK_MODIFICATIONS=False)
 db = SQLAlchemy(app)
-TYPES = {"主合同收入":"contract", "分包支出":"subcontract", "其他支出":"other"}
+TYPES = {"主合同收入":"contract", "VO变更款项收入":"contract", "分包支出":"subcontract", "其他支出":"other"}
 STATUSES = ["未开票", "部分开票", "已开票", "已收款"]
 
 class User(db.Model):
