@@ -1,10 +1,19 @@
 import os
+from io import BytesIO
 from datetime import date, datetime
 from decimal import Decimal
-from flask import Flask, flash, redirect, render_template, request, session, url_for
+from flask import Flask, flash, redirect, render_template, request, session, url_for, send_file
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect, text
 from werkzeug.security import check_password_hash, generate_password_hash
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 app = Flask(__name__)
 url = os.getenv("DATABASE_URL", "sqlite:///finance.db").replace("postgres://", "postgresql://", 1)
@@ -51,6 +60,11 @@ def totals(ps):
  for p in ps:
   for k,v in p.totals.items(): r[k]+=v
  return r
+def export_rows(year):
+ rows=[]
+ for p in Project.query.filter_by(year=year).order_by(Project.name).all():
+  for e in p.entries: rows.append([p.name,e.payment_date.strftime("%Y-%m-%d"),e.payment_type,e.currency,float(e.amount),e.receipt_status,float(e.received_amount or 0),e.invoice_status,float(e.invoice_amount),e.notes or ""])
+ return rows
 @app.context_processor
 def ctx(): return {"current_user":me(),"now_year":datetime.now().year,"payment_types":TYPES,"invoice_statuses":STATUSES,"receipt_statuses":RECEIPT_STATUSES}
 @app.template_filter("currency")
@@ -77,6 +91,23 @@ def dashboard():
 @login_required
 def year_detail(year):
  ps=Project.query.filter_by(year=year).order_by(Project.updated_at.desc()).all();return render_template("year_detail.html",year=year,projects=ps,totals=totals(ps))
+@app.route("/years/<int:year>/export/<format>")
+@login_required
+def year_export(year,format):
+ headers=["项目","日期","类型","币种","款项金额","款项状态","已收金额","发票进度","开票金额","备注"]; rows=export_rows(year)
+ if format=="excel":
+  wb=Workbook();ws=wb.active;ws.title=f"{year}年度款项";ws.append(headers)
+  for r in rows:ws.append(r)
+  for c in ws[1]:c.font=Font(bold=True,color="FFFFFF");c.fill=PatternFill("solid",fgColor="EF1746")
+  ws.freeze_panes="A2";ws.auto_filter.ref=ws.dimensions
+  for col in ws.columns:ws.column_dimensions[col[0].column_letter].width=min(max(max(len(str(x.value or "")) for x in col)+2,10),28)
+  buf=BytesIO();wb.save(buf);buf.seek(0);return send_file(buf,as_attachment=True,download_name=f"{year}年度款项明细.xlsx",mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+ if format=="pdf":
+  buf=BytesIO();pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"));doc=SimpleDocTemplate(buf,pagesize=landscape(A4),leftMargin=20,rightMargin=20,topMargin=20,bottomMargin=20)
+  style=getSampleStyleSheet()["Title"];style.fontName="STSong-Light";style.fontSize=16
+  data=[headers]+[[str(v) for v in r] for r in rows];table=Table(data,repeatRows=1,colWidths=[70,55,80,38,60,60,60,60,60,110]);table.setStyle(TableStyle([("FONTNAME",(0,0),(-1,-1),"STSong-Light"),("FONTSIZE",(0,0),(-1,-1),7),("BACKGROUND",(0,0),(-1,0),colors.HexColor("#EF1746")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),.25,colors.HexColor("#dddddd")),("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
+  doc.build([Paragraph(f"{year}年度款项明细",style),Spacer(1,12),table]);buf.seek(0);return send_file(buf,as_attachment=True,download_name=f"{year}年度款项明细.pdf",mimetype="application/pdf")
+ return "格式不支持",400
 @app.route("/projects/new",methods=["GET","POST"])
 @login_required
 def project_new():
