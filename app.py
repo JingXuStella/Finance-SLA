@@ -3,6 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from flask import Flask, flash, redirect, render_template, request, session, url_for
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import inspect, text
 from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
@@ -11,6 +12,7 @@ app.config.update(SECRET_KEY=os.getenv("SECRET_KEY", "change-this-before-product
 db = SQLAlchemy(app)
 TYPES = {"主合同收入":"contract", "VO变更款项收入":"contract", "分包支出":"subcontract", "其他支出":"other"}
 STATUSES = ["未开票", "部分开票", "已开票", "已收款"]
+RECEIPT_STATUSES = ["未收款", "部分收款", "已收款"]
 
 class User(db.Model):
  id=db.Column(db.Integer,primary_key=True); username=db.Column(db.String(64),unique=True,nullable=False); password_hash=db.Column(db.String(256),nullable=False); is_admin=db.Column(db.Boolean,default=False); created_at=db.Column(db.DateTime,default=datetime.utcnow)
@@ -25,7 +27,7 @@ class Project(db.Model):
   for e in self.entries: t[e.category]+=e.amount; t["invoice"]+=e.invoice_amount
   t["profit"]=t["contract"]-t["subcontract"]-t["other"]; return t
 class LedgerEntry(db.Model):
- id=db.Column(db.Integer,primary_key=True); project_id=db.Column(db.Integer,db.ForeignKey("project.id"),index=True,nullable=False); payment_type=db.Column(db.String(40),nullable=False); category=db.Column(db.String(20),nullable=False); amount=db.Column(db.Numeric(14,2),default=0); invoice_amount=db.Column(db.Numeric(14,2),default=0); invoice_status=db.Column(db.String(30),default="未开票"); payment_date=db.Column(db.Date,default=date.today); notes=db.Column(db.Text,default="")
+ id=db.Column(db.Integer,primary_key=True); project_id=db.Column(db.Integer,db.ForeignKey("project.id"),index=True,nullable=False); payment_type=db.Column(db.String(40),nullable=False); category=db.Column(db.String(20),nullable=False); amount=db.Column(db.Numeric(14,2),default=0); currency=db.Column(db.String(8),default="CNY"); receipt_status=db.Column(db.String(30),default="未收款"); received_amount=db.Column(db.Numeric(14,2),default=0); invoice_amount=db.Column(db.Numeric(14,2),default=0); invoice_status=db.Column(db.String(30),default="未开票"); payment_date=db.Column(db.Date,default=date.today); notes=db.Column(db.Text,default="")
 
 def me(): return db.session.get(User,session["user_id"]) if session.get("user_id") else None
 def login_required(f):
@@ -50,7 +52,7 @@ def totals(ps):
   for k,v in p.totals.items(): r[k]+=v
  return r
 @app.context_processor
-def ctx(): return {"current_user":me(),"now_year":datetime.now().year,"payment_types":TYPES,"invoice_statuses":STATUSES}
+def ctx(): return {"current_user":me(),"now_year":datetime.now().year,"payment_types":TYPES,"invoice_statuses":STATUSES,"receipt_statuses":RECEIPT_STATUSES}
 @app.template_filter("currency")
 def currency(v): return f"¥{(v or 0):,.2f}"
 
@@ -111,8 +113,8 @@ def save_entry(e,p):
   typ=request.form["payment_type"]
   if typ not in TYPES:raise ValueError("款项类型无效。")
   if not e:e=LedgerEntry(project=p)
-  e.payment_type=typ;e.category=TYPES[typ];e.amount=amount("amount");e.invoice_amount=amount("invoice_amount");e.invoice_status=request.form["invoice_status"];e.payment_date=datetime.strptime(request.form["payment_date"],"%Y-%m-%d").date();e.notes=request.form.get("notes","")
-  if e.invoice_status not in STATUSES:raise ValueError("开票状态无效。")
+  e.payment_type=typ;e.category=TYPES[typ];e.amount=amount("receivable_amount");e.currency=request.form.get("currency","CNY");e.receipt_status=request.form["receipt_status"];e.received_amount=amount("received_amount");e.invoice_amount=amount("invoice_amount");e.invoice_status=request.form["invoice_status"];e.payment_date=datetime.strptime(request.form["payment_date"],"%Y-%m-%d").date();e.notes=request.form.get("notes","")
+  if e.invoice_status not in STATUSES or e.receipt_status not in RECEIPT_STATUSES:raise ValueError("状态无效。")
   db.session.add(e);db.session.commit();flash("款项已保存。","success")
  except Exception as x:flash(str(x),"danger")
  return redirect(url_for("project_detail",project_id=(p or e.project).id))
@@ -134,6 +136,12 @@ def users():
 
 def initialize():
  db.create_all()
+ # Add columns for deployments originally created before detailed receipt tracking.
+ columns={c['name'] for c in inspect(db.engine).get_columns('ledger_entry')}
+ with db.engine.begin() as conn:
+  if 'currency' not in columns: conn.execute(text("ALTER TABLE ledger_entry ADD COLUMN currency VARCHAR(8) DEFAULT 'CNY'"))
+  if 'receipt_status' not in columns: conn.execute(text("ALTER TABLE ledger_entry ADD COLUMN receipt_status VARCHAR(30) DEFAULT '未收款'"))
+  if 'received_amount' not in columns: conn.execute(text("ALTER TABLE ledger_entry ADD COLUMN received_amount NUMERIC(14,2) DEFAULT 0"))
  if not User.query.first():
   u=User(username=os.getenv("ADMIN_USERNAME","admin"),is_admin=True);u.set_password(os.getenv("ADMIN_PASSWORD","ChangeMe123!"));db.session.add(u);db.session.commit()
  for p in Project.query.all():
