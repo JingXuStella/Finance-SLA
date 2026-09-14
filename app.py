@@ -174,7 +174,10 @@ def save_entry(e,p):
 @app.route("/entries/<int:entry_id>/delete",methods=["POST"])
 @login_required
 def entry_delete(entry_id):
- e=db.get_or_404(LedgerEntry,entry_id);p=e.project_id;db.session.delete(e);db.session.commit();return redirect(url_for("project_detail",project_id=p))
+ e=db.get_or_404(LedgerEntry,entry_id);p=e.project_id
+ if not me().check_password(request.form.get("password","")):
+  flash("密码验证失败，款项未删除。","danger");return redirect(url_for("project_detail",project_id=p))
+ db.session.delete(e);db.session.commit();flash("款项已删除。","success");return redirect(url_for("project_detail",project_id=p))
 @app.route("/entries/<int:entry_id>/attachments",methods=["POST"])
 @login_required
 def attachment_upload(entry_id):
