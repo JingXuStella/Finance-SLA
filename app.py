@@ -92,7 +92,9 @@ def totals(ps):
 def export_rows(year):
  rows=[]
  for p in Project.query.filter_by(year=year).order_by(Project.name).all():
-  for e in p.entries: rows.append([p.name,e.payment_date.strftime("%Y-%m-%d"),e.payment_type,e.currency,float(e.amount),e.receipt_status,float(e.received_amount or 0),e.invoice_status,float(e.invoice_amount),e.notes or ""])
+  for e in p.entries:
+   stages="; ".join(f"阶段{stage.sequence}: {stage.amount} ({stage.status})" for stage in e.stages)
+   rows.append([p.name,e.notes or "未命名款项",e.payment_type,e.entry_status,e.payment_date.strftime("%Y-%m-%d"),e.expected_completion_date.strftime("%Y-%m-%d") if e.expected_completion_date else "",e.currency,float(e.amount),e.receipt_status,float(e.received_amount or 0),float(e.invoice_amount) if e.invoice_amount is not None else None,float(e.unissued_invoice_amount) if e.unissued_invoice_amount is not None else None,stages])
  return rows
 @app.context_processor
 def ctx(): return {"current_user":me(),"now_year":datetime.now().year,"payment_types":TYPES,"invoice_statuses":STATUSES,"income_statuses":INCOME_STATUSES,"expense_statuses":EXPENSE_STATUSES,"settlement_statuses":INCOME_STATUSES+EXPENSE_STATUSES,"entry_statuses":ENTRY_STATUSES}
@@ -123,7 +125,7 @@ def year_detail(year):
 @app.route("/years/<int:year>/export/<format>")
 @login_required
 def year_export(year,format):
- headers=["项目","日期","类型","币种","款项金额","款项状态","已收金额","发票进度","开票金额","备注"]; rows=export_rows(year)
+ headers=["项目","款项","类型","状态","日期","预计完成时间","币种","款项金额","款项状态","已收/已支出","在途开票金额","未开票金额","款项阶段"]; rows=export_rows(year)
  if format=="excel":
   wb=Workbook();ws=wb.active;ws.title=f"{year}年度款项";ws.append(headers)
   for r in rows:ws.append(r)
@@ -134,7 +136,7 @@ def year_export(year,format):
  if format=="pdf":
   buf=BytesIO();pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"));doc=SimpleDocTemplate(buf,pagesize=landscape(A4),leftMargin=20,rightMargin=20,topMargin=20,bottomMargin=20)
   style=getSampleStyleSheet()["Title"];style.fontName="STSong-Light";style.fontSize=16
-  data=[headers]+[[str(v) for v in r] for r in rows];table=Table(data,repeatRows=1,colWidths=[70,55,80,38,60,60,60,60,60,110]);table.setStyle(TableStyle([("FONTNAME",(0,0),(-1,-1),"STSong-Light"),("FONTSIZE",(0,0),(-1,-1),7),("BACKGROUND",(0,0),(-1,0),colors.HexColor("#EF1746")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),.25,colors.HexColor("#dddddd")),("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
+  data=[headers]+[["-" if v is None or v=="" else str(v) for v in r] for r in rows];table=Table(data,repeatRows=1,colWidths=[48,58,52,42,48,58,34,52,52,52,55,55,86]);table.setStyle(TableStyle([("FONTNAME",(0,0),(-1,-1),"STSong-Light"),("FONTSIZE",(0,0),(-1,-1),6),("BACKGROUND",(0,0),(-1,0),colors.HexColor("#EF1746")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),.25,colors.HexColor("#dddddd")),("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
   doc.build([Paragraph(f"{year}年度款项明细",style),Spacer(1,12),table]);buf.seek(0);return send_file(buf,as_attachment=True,download_name=f"{year}年度款项明细.pdf",mimetype="application/pdf")
  return "格式不支持",400
 @app.route("/projects/new",methods=["GET","POST"])
