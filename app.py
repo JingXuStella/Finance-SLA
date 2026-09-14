@@ -1,5 +1,7 @@
 import os
 import uuid
+import ast
+import re
 from io import BytesIO
 from datetime import date, datetime
 from decimal import Decimal
@@ -61,10 +63,24 @@ def admin_required(f):
  w.__name__=f.__name__; return w
 def amount(k):
  try:
-  v=Decimal(request.form.get(k,"0") or "0")
+  raw=request.form.get(k,"0") or "0"
+  raw=re.sub(r"(\d+(?:\.\d+)?)%",r"(\1/100)",raw.replace(" ",""))
+  def calculate(node):
+   if isinstance(node,ast.Constant) and isinstance(node.value,(int,float)): return Decimal(str(node.value))
+   if isinstance(node,ast.UnaryOp) and isinstance(node.op,(ast.UAdd,ast.USub)):
+    value=calculate(node.operand);return value if isinstance(node.op,ast.UAdd) else -value
+   if isinstance(node,ast.BinOp) and isinstance(node.op,(ast.Add,ast.Sub,ast.Mult,ast.Div)):
+    left,right=calculate(node.left),calculate(node.right)
+    if isinstance(node.op,ast.Add): return left+right
+    if isinstance(node.op,ast.Sub): return left-right
+    if isinstance(node.op,ast.Mult): return left*right
+    if right==0: raise ValueError
+    return left/right
+   raise ValueError
+  v=calculate(ast.parse(raw,mode="eval").body)
   if v<0: raise ValueError
   return v
- except: raise ValueError("金额必须是大于或等于 0 的数字。")
+ except: raise ValueError("金额须为大于或等于 0 的数字或计算公式，例如 100000*0.3。")
 def optional_amount(k):
  if not request.form.get(k,"").strip(): return None
  return amount(k)
