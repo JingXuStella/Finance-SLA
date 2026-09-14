@@ -164,7 +164,7 @@ def save_entry(e,p):
   if e.entry_status not in ENTRY_STATUSES or e.receipt_status not in allowed:raise ValueError("款项状态与款项类型不匹配。")
   if e.has_stages:
    count=int(request.form.get("stage_count",0))
-   if count<1 or count>5: raise ValueError("阶段数量需在 1 至 5 之间。")
+   if count<1 or count>10: raise ValueError("阶段数量需在 1 至 10 之间。")
    e.stages.clear()
    for i in range(1,count+1):
     stage_status=request.form.get(f"stage_status_{i}","待处理")
