@@ -44,7 +44,7 @@ class LedgerEntry(db.Model):
  attachments=db.relationship("Attachment",backref="entry",cascade="all, delete-orphan",lazy="select")
  stages=db.relationship("PaymentStage",backref="entry",cascade="all, delete-orphan",lazy="select",order_by="PaymentStage.sequence")
 class PaymentStage(db.Model):
- id=db.Column(db.Integer,primary_key=True);entry_id=db.Column(db.Integer,db.ForeignKey("ledger_entry.id"),nullable=False,index=True);sequence=db.Column(db.Integer,nullable=False);amount=db.Column(db.Numeric(14,2),nullable=False,default=0)
+ id=db.Column(db.Integer,primary_key=True);entry_id=db.Column(db.Integer,db.ForeignKey("ledger_entry.id"),nullable=False,index=True);sequence=db.Column(db.Integer,nullable=False);amount=db.Column(db.Numeric(14,2),nullable=False,default=0);status=db.Column(db.String(20),default="待处理")
 class Attachment(db.Model):
  id=db.Column(db.Integer,primary_key=True); entry_id=db.Column(db.Integer,db.ForeignKey("ledger_entry.id"),nullable=False,index=True); original_name=db.Column(db.String(255),nullable=False); stored_name=db.Column(db.String(255),nullable=False,unique=True); uploaded_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 
@@ -130,7 +130,9 @@ def project_new():
  return render_template("project_form.html",project=None)
 @app.route("/projects/<int:project_id>")
 @login_required
-def project_detail(project_id): return render_template("project_detail.html",project=db.get_or_404(Project,project_id))
+def project_detail(project_id):
+ p=db.get_or_404(Project,project_id); rank={"待处理":0,"逾期":1,"进行中":2,"完成":3}
+ return render_template("project_detail.html",project=p,entries=sorted(p.entries,key=lambda e:(rank.get(e.entry_status,9),e.expected_completion_date or date.max,e.id)))
 @app.route("/projects/<int:project_id>/edit",methods=["GET","POST"])
 @login_required
 def project_edit(project_id):
@@ -161,7 +163,10 @@ def save_entry(e,p):
    count=int(request.form.get("stage_count",0))
    if count<1 or count>5: raise ValueError("阶段数量需在 1 至 5 之间。")
    e.stages.clear()
-   for i in range(1,count+1): e.stages.append(PaymentStage(sequence=i,amount=amount(f"stage_amount_{i}")))
+   for i in range(1,count+1):
+    stage_status=request.form.get(f"stage_status_{i}","待处理")
+    if stage_status not in ENTRY_STATUSES: raise ValueError("阶段状态无效。")
+    e.stages.append(PaymentStage(sequence=i,amount=amount(f"stage_amount_{i}"),status=stage_status))
   else: e.stages.clear()
   db.session.add(e);db.session.commit();flash("款项已保存。","success")
  except Exception as x:flash(str(x),"danger")
@@ -223,6 +228,9 @@ def initialize():
   if 'entry_status' not in columns: conn.execute(text("ALTER TABLE ledger_entry ADD COLUMN entry_status VARCHAR(20) DEFAULT 'ongoing'"))
   if 'has_stages' not in columns: conn.execute(text("ALTER TABLE ledger_entry ADD COLUMN has_stages BOOLEAN DEFAULT FALSE"))
   if 'expected_completion_date' not in columns: conn.execute(text("ALTER TABLE ledger_entry ADD COLUMN expected_completion_date DATE"))
+ stage_columns={c['name'] for c in inspect(db.engine).get_columns('payment_stage')}
+ with db.engine.begin() as conn:
+  if 'status' not in stage_columns: conn.execute(text("ALTER TABLE payment_stage ADD COLUMN status VARCHAR(20) DEFAULT '待处理'"))
  if not User.query.first():
   u=User(username=os.getenv("ADMIN_USERNAME","admin"),is_admin=True);u.set_password(os.getenv("ADMIN_PASSWORD","ChangeMe123!"));db.session.add(u);db.session.commit()
  for p in Project.query.all():
