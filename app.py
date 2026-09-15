@@ -115,9 +115,13 @@ def logout(): session.clear();return redirect(url_for("login"))
 @login_required
 def dashboard():
  ys=[]
+ pending=[]
  for y, in db.session.query(Project.year).distinct().order_by(Project.year.desc()):
   ps=Project.query.filter_by(year=y).all(); ys.append({"year":y,"count":len(ps),"totals":totals(ps)})
- return render_template("dashboard.html",years=ys)
+ for project in Project.query.order_by(Project.year.desc(),Project.name).all():
+  count=sum(1 for entry in project.entries if entry.entry_status=="待处理")
+  if count: pending.append({"project":project,"count":count})
+ return render_template("dashboard.html",years=ys,pending=pending)
 @app.route("/years/<int:year>")
 @login_required
 def year_detail(year):
