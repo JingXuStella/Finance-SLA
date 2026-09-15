@@ -202,16 +202,27 @@ def entry_delete(entry_id):
 @app.route("/entries/<int:entry_id>/attachments",methods=["POST"])
 @login_required
 def attachment_upload(entry_id):
- e=db.get_or_404(LedgerEntry,entry_id);f=request.files.get("attachment"); allowed={"jpg","jpeg","png","gif","webp","pdf","xlsx","xls","doc","docx","csv","txt"}
- if not f or not f.filename: flash("请选择要上传的附件。","danger")
- elif "." not in f.filename or f.filename.rsplit(".",1)[1].lower() not in allowed: flash("不支持该文件格式。","danger")
+ e=db.get_or_404(LedgerEntry,entry_id);files=[f for f in request.files.getlist("attachment") if f and f.filename]; allowed={"jpg","jpeg","png","gif","webp","pdf","xlsx","xls","doc","docx","csv","txt"}
+ if not files: flash("请选择要上传的附件。","danger")
+ elif len(files)>5: flash("一次最多上传 5 个附件。","danger")
+ elif any("." not in f.filename or f.filename.rsplit(".",1)[1].lower() not in allowed for f in files): flash("包含不支持的文件格式。","danger")
  else:
-  original=secure_filename(f.filename) or "attachment"; stored=f"{uuid.uuid4().hex}_{original}";os.makedirs(app.config["UPLOAD_FOLDER"],exist_ok=True);f.save(os.path.join(app.config["UPLOAD_FOLDER"],stored));db.session.add(Attachment(entry=e,original_name=original,stored_name=stored));db.session.commit();flash("附件已上传。","success")
+  os.makedirs(app.config["UPLOAD_FOLDER"],exist_ok=True)
+  for f in files:
+   original=secure_filename(f.filename) or "attachment"; stored=f"{uuid.uuid4().hex}_{original}";f.save(os.path.join(app.config["UPLOAD_FOLDER"],stored));db.session.add(Attachment(entry=e,original_name=original,stored_name=stored))
+  db.session.commit();flash(f"已上传 {len(files)} 个附件。","success")
  return redirect(url_for("project_detail",project_id=e.project_id))
 @app.route("/attachments/<int:attachment_id>/download")
 @login_required
 def attachment_download(attachment_id):
  a=db.get_or_404(Attachment,attachment_id);return send_from_directory(app.config["UPLOAD_FOLDER"],a.stored_name,as_attachment=True,download_name=a.original_name)
+@app.route("/attachments/<int:attachment_id>/delete",methods=["POST"])
+@login_required
+def attachment_delete(attachment_id):
+ a=db.get_or_404(Attachment,attachment_id);project_id=a.entry.project_id;path=os.path.join(app.config["UPLOAD_FOLDER"],a.stored_name)
+ if os.path.isfile(path): os.remove(path)
+ db.session.delete(a);db.session.commit();flash("附件已删除。","success")
+ return redirect(url_for("project_detail",project_id=project_id))
 
 @app.route("/users",methods=["GET","POST"])
 def users():
