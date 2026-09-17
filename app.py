@@ -104,12 +104,14 @@ def totals(ps):
  for p in ps:
   for k,v in p.totals.items(): r[k]+=v
  return r
-def kpi_breakdown(ps):
- r={}
- for p in ps:
-  for e in p.entries:
-   for year,value in e.kpi_by_year.items(): r[year]=r.get(year,Decimal("0"))+value
- return [{"year":year,"amount":float(amount)} for year,amount in sorted(r.items())]
+def weekly_kpi_reports():
+ reports={}
+ for project in Project.query.order_by(Project.year).all():
+  for entry in project.entries:
+   for kpi_year,value in entry.kpi_by_year.items():
+    report=reports.setdefault(kpi_year,{"amount":Decimal("0"),"sources":{}})
+    report["amount"]+=value;report["sources"][project.year]=report["sources"].get(project.year,Decimal("0"))+value
+ return [{"year":year,"kpi":float(report["amount"]),"breakdown":[{"label":f"{source_year} 年项目","amount":float(amount)} for source_year,amount in sorted(report["sources"].items())]} for year,report in sorted(reports.items(),reverse=True)]
 def export_rows(year):
  rows=[]
  for p in Project.query.filter_by(year=year).order_by(Project.name).all():
@@ -136,10 +138,10 @@ def logout(): session.clear();return redirect(url_for("login"))
 @login_required
 def dashboard():
  ys=[]
- reports=[]
+ reports=weekly_kpi_reports()
  pending=[]
  for y, in db.session.query(Project.year).distinct().order_by(Project.year.desc()):
-  ps=Project.query.filter_by(year=y).all(); summary=totals(ps);ys.append({"year":y,"count":len(ps),"totals":summary});reports.append({"year":y,"kpi":float(summary["kpi"]),"breakdown":kpi_breakdown(ps)})
+  ps=Project.query.filter_by(year=y).all(); summary=totals(ps);ys.append({"year":y,"count":len(ps),"totals":summary})
  for project in Project.query.order_by(Project.year.desc(),Project.name).all():
   count=sum(1 for entry in project.entries if entry.entry_status=="待处理")
   if count: pending.append({"project":project,"count":count})
