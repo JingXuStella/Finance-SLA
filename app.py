@@ -100,7 +100,7 @@ def optional_amount(k):
  if not request.form.get(k,"").strip(): return None
  return amount(k)
 def totals(ps):
- r={k:Decimal("0") for k in ["contract","subcontract","other","invoice","profit"]}
+ r={k:Decimal("0") for k in ["contract","subcontract","other","invoice","received","paid","kpi","receivable","receivable_balance","payable","profit"]}
  for p in ps:
   for k,v in p.totals.items(): r[k]+=v
  return r
