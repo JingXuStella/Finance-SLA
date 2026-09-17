@@ -38,8 +38,14 @@ class Project(db.Model):
  entries=db.relationship("LedgerEntry",backref="project",cascade="all, delete-orphan",lazy="select",order_by="LedgerEntry.payment_date.desc(), LedgerEntry.id.desc()")
  @property
  def totals(self):
-  t={k:Decimal("0") for k in ["contract","subcontract","other","invoice"]}
-  for e in self.entries: t[e.category]+=e.amount; t["invoice"]+=e.invoice_amount or 0
+  t={k:Decimal("0") for k in ["contract","subcontract","other","invoice","received","paid","kpi"]}
+  for e in self.entries:
+   t[e.category]+=e.amount; t["invoice"]+=e.invoice_amount or 0
+   if e.category=="contract": t["received"]+=e.received_amount or 0
+   else: t["paid"]+=e.received_amount or 0
+   t["kpi"]+=sum(e.kpi_by_year.values(),Decimal("0"))
+  t["receivable"]=t["contract"];t["receivable_balance"]=t["receivable"]-t["received"]
+  t["payable"]=t["subcontract"]+t["other"]-t["paid"]
   t["profit"]=t["contract"]-t["subcontract"]-t["other"]; return t
 class LedgerEntry(db.Model):
  id=db.Column(db.Integer,primary_key=True); project_id=db.Column(db.Integer,db.ForeignKey("project.id"),index=True,nullable=False); payment_type=db.Column(db.String(40),nullable=False); category=db.Column(db.String(20),nullable=False); amount=db.Column(db.Numeric(14,2),default=0); currency=db.Column(db.String(8),default="CNY"); entry_status=db.Column(db.String(20),default="进行中"); expected_completion_date=db.Column(db.Date,nullable=True); kpi_included=db.Column(db.Boolean,default=False); kpi_year=db.Column(db.Integer,nullable=True); has_stages=db.Column(db.Boolean,default=False); receipt_status=db.Column(db.String(30),default="未收款"); received_amount=db.Column(db.Numeric(14,2),default=0); invoice_amount=db.Column(db.Numeric(14,2),nullable=True); unissued_invoice_amount=db.Column(db.Numeric(14,2),nullable=True); invoice_status=db.Column(db.String(30),default="未开票"); payment_date=db.Column(db.Date,default=date.today); notes=db.Column(db.Text,default="")
@@ -166,7 +172,7 @@ def project_new():
 @login_required
 def project_detail(project_id):
  p=db.get_or_404(Project,project_id); rank={"待处理":0,"逾期":1,"进行中":2,"完成":3}
- return render_template("project_detail.html",project=p,entries=sorted(p.entries,key=lambda e:(rank.get(e.entry_status,9),e.expected_completion_date or date.max,e.id)))
+ return render_template("project_detail.html",project=p,entries=sorted(p.entries,key=lambda e:(rank.get(e.entry_status,9),e.id)))
 @app.route("/projects/<int:project_id>/edit",methods=["GET","POST"])
 @login_required
 def project_edit(project_id):
@@ -190,7 +196,7 @@ def save_entry(e,p):
   typ=request.form["payment_type"]
   if typ not in TYPES:raise ValueError("款项类型无效。")
   if not e:e=LedgerEntry(project_id=p.id)
-  e.payment_type=typ;e.category=TYPES[typ];e.amount=amount("receivable_amount");e.currency=request.form.get("currency","CNY");e.entry_status=request.form.get("entry_status","进行中");e.expected_completion_date=datetime.strptime(request.form["expected_completion_date"],"%Y-%m-%d").date() if request.form.get("expected_completion_date") else None;e.kpi_included=request.form.get("kpi_included")=="on";e.kpi_year=int(request.form["kpi_year"]) if request.form.get("kpi_year") else None;e.has_stages=request.form.get("has_stages")=="on";e.receipt_status=request.form["receipt_status"];e.received_amount=amount("received_amount");e.invoice_amount=optional_amount("in_transit_invoice_amount");e.unissued_invoice_amount=optional_amount("unissued_invoice_amount");e.payment_date=datetime.strptime(request.form["payment_date"],"%Y-%m-%d").date();e.notes=request.form.get("notes","")
+  e.payment_type=typ;e.category=TYPES[typ];e.amount=amount("receivable_amount");e.currency=request.form.get("currency","CNY");e.entry_status=request.form.get("entry_status","进行中");e.kpi_included=request.form.get("kpi_included")=="on";e.kpi_year=int(request.form["kpi_year"]) if request.form.get("kpi_year") else None;e.has_stages=request.form.get("has_stages")=="on";e.receipt_status=request.form["receipt_status"];e.received_amount=amount("received_amount");e.invoice_amount=optional_amount("in_transit_invoice_amount");e.unissued_invoice_amount=optional_amount("unissued_invoice_amount");e.payment_date=datetime.strptime(request.form["payment_date"],"%Y-%m-%d").date();e.notes=request.form.get("notes","")
   allowed=INCOME_STATUSES if e.category=="contract" else EXPENSE_STATUSES
   if e.entry_status not in ENTRY_STATUSES or e.receipt_status not in allowed:raise ValueError("款项状态与款项类型不匹配。")
   if e.category!="contract": e.kpi_included=False;e.kpi_year=None
