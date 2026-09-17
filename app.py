@@ -104,6 +104,12 @@ def totals(ps):
  for p in ps:
   for k,v in p.totals.items(): r[k]+=v
  return r
+def kpi_breakdown(ps):
+ r={}
+ for p in ps:
+  for e in p.entries:
+   for year,value in e.kpi_by_year.items(): r[year]=r.get(year,Decimal("0"))+value
+ return [{"year":year,"amount":float(amount)} for year,amount in sorted(r.items())]
 def export_rows(year):
  rows=[]
  for p in Project.query.filter_by(year=year).order_by(Project.name).all():
@@ -130,13 +136,14 @@ def logout(): session.clear();return redirect(url_for("login"))
 @login_required
 def dashboard():
  ys=[]
+ reports=[]
  pending=[]
  for y, in db.session.query(Project.year).distinct().order_by(Project.year.desc()):
-  ps=Project.query.filter_by(year=y).all(); ys.append({"year":y,"count":len(ps),"totals":totals(ps)})
+  ps=Project.query.filter_by(year=y).all(); summary=totals(ps);ys.append({"year":y,"count":len(ps),"totals":summary});reports.append({"year":y,"kpi":float(summary["kpi"]),"breakdown":kpi_breakdown(ps)})
  for project in Project.query.order_by(Project.year.desc(),Project.name).all():
   count=sum(1 for entry in project.entries if entry.entry_status=="待处理")
   if count: pending.append({"project":project,"count":count})
- return render_template("dashboard.html",years=ys,pending=pending)
+ return render_template("dashboard.html",years=ys,pending=pending,weekly_reports=reports)
 @app.route("/years/<int:year>")
 @login_required
 def year_detail(year):
