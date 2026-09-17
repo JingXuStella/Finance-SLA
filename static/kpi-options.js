@@ -8,8 +8,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const included = kpiConfig.querySelector('[name="kpi_included"]');
     const year = kpiConfig.querySelector('[name="kpi_year"]');
+    const hasStages = form.querySelector('[name="has_stages"]');
     const syncKpiOptions = () => {
-      const applicable = incomeTypes.includes(paymentType.value);
+      const applicable = incomeTypes.includes(paymentType.value) && !(hasStages && hasStages.checked);
       kpiConfig.hidden = !applicable;
       included.disabled = !applicable;
       year.disabled = !applicable || !included.checked;
@@ -23,6 +24,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     paymentType.addEventListener("change", syncKpiOptions);
     included.addEventListener("change", syncKpiOptions);
+    if (hasStages) hasStages.addEventListener("change", syncKpiOptions);
     syncKpiOptions();
   });
 });

@@ -45,8 +45,17 @@ class LedgerEntry(db.Model):
  id=db.Column(db.Integer,primary_key=True); project_id=db.Column(db.Integer,db.ForeignKey("project.id"),index=True,nullable=False); payment_type=db.Column(db.String(40),nullable=False); category=db.Column(db.String(20),nullable=False); amount=db.Column(db.Numeric(14,2),default=0); currency=db.Column(db.String(8),default="CNY"); entry_status=db.Column(db.String(20),default="进行中"); expected_completion_date=db.Column(db.Date,nullable=True); kpi_included=db.Column(db.Boolean,default=False); kpi_year=db.Column(db.Integer,nullable=True); has_stages=db.Column(db.Boolean,default=False); receipt_status=db.Column(db.String(30),default="未收款"); received_amount=db.Column(db.Numeric(14,2),default=0); invoice_amount=db.Column(db.Numeric(14,2),nullable=True); unissued_invoice_amount=db.Column(db.Numeric(14,2),nullable=True); invoice_status=db.Column(db.String(30),default="未开票"); payment_date=db.Column(db.Date,default=date.today); notes=db.Column(db.Text,default="")
  attachments=db.relationship("Attachment",backref="entry",cascade="all, delete-orphan",lazy="select")
  stages=db.relationship("PaymentStage",backref="entry",cascade="all, delete-orphan",lazy="select",order_by="PaymentStage.sequence")
+ @property
+ def kpi_by_year(self):
+  if self.category!="contract": return {}
+  if self.has_stages:
+   totals={}
+   for stage in self.stages:
+    if stage.kpi_included and stage.kpi_year: totals[stage.kpi_year]=totals.get(stage.kpi_year,Decimal("0"))+stage.amount
+   return totals
+  return {self.kpi_year:self.amount} if self.kpi_included and self.kpi_year else {}
 class PaymentStage(db.Model):
- id=db.Column(db.Integer,primary_key=True);entry_id=db.Column(db.Integer,db.ForeignKey("ledger_entry.id"),nullable=False,index=True);sequence=db.Column(db.Integer,nullable=False);amount=db.Column(db.Numeric(14,2),nullable=False,default=0);status=db.Column(db.String(20),default="待处理")
+ id=db.Column(db.Integer,primary_key=True);entry_id=db.Column(db.Integer,db.ForeignKey("ledger_entry.id"),nullable=False,index=True);sequence=db.Column(db.Integer,nullable=False);amount=db.Column(db.Numeric(14,2),nullable=False,default=0);status=db.Column(db.String(20),default="待处理");kpi_included=db.Column(db.Boolean,default=False);kpi_year=db.Column(db.Integer,nullable=True)
 class Attachment(db.Model):
  id=db.Column(db.Integer,primary_key=True); entry_id=db.Column(db.Integer,db.ForeignKey("ledger_entry.id"),nullable=False,index=True); original_name=db.Column(db.String(255),nullable=False); stored_name=db.Column(db.String(255),nullable=False,unique=True); uploaded_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 
@@ -193,7 +202,11 @@ def save_entry(e,p):
    for i in range(1,count+1):
     stage_status=request.form.get(f"stage_status_{i}","待处理")
     if stage_status not in ENTRY_STATUSES: raise ValueError("阶段状态无效。")
-    e.stages.append(PaymentStage(sequence=i,amount=amount(f"stage_amount_{i}"),status=stage_status))
+    stage_kpi_included=request.form.get(f"stage_kpi_included_{i}")=="on"
+    stage_kpi_year=int(request.form[f"stage_kpi_year_{i}"]) if request.form.get(f"stage_kpi_year_{i}") else None
+    if e.category!="contract": stage_kpi_included=False;stage_kpi_year=None
+    elif stage_kpi_included and not stage_kpi_year: raise ValueError("阶段计入 KPI 时必须填写年份。")
+    e.stages.append(PaymentStage(sequence=i,amount=amount(f"stage_amount_{i}"),status=stage_status,kpi_included=stage_kpi_included,kpi_year=stage_kpi_year))
   else: e.stages.clear()
   db.session.add(e);db.session.commit();flash("款项已保存。","success")
  except Exception as x:
@@ -276,6 +289,8 @@ def initialize():
  stage_columns={c['name'] for c in inspect(db.engine).get_columns('payment_stage')}
  with db.engine.begin() as conn:
   if 'status' not in stage_columns: conn.execute(text("ALTER TABLE payment_stage ADD COLUMN status VARCHAR(20) DEFAULT '待处理'"))
+  if 'kpi_included' not in stage_columns: conn.execute(text("ALTER TABLE payment_stage ADD COLUMN kpi_included BOOLEAN DEFAULT FALSE"))
+  if 'kpi_year' not in stage_columns: conn.execute(text("ALTER TABLE payment_stage ADD COLUMN kpi_year INTEGER"))
  if not User.query.first():
   u=User(username=os.getenv("ADMIN_USERNAME","admin"),is_admin=True);u.set_password(os.getenv("ADMIN_PASSWORD","ChangeMe123!"));db.session.add(u);db.session.commit()
  for p in Project.query.all():
